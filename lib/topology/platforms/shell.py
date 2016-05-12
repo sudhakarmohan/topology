@@ -25,6 +25,8 @@ from __future__ import print_function, division
 from logging import getLogger
 from re import sub as regex_sub
 from abc import ABCMeta, abstractmethod
+from collections import OrderedDict
+from functools import wraps
 
 from pexpect import spawn
 from six import add_metaclass
@@ -75,10 +77,38 @@ class BaseShell(object):
     shell is expected to be an interactive shell, where an expect-like
     mechanism is to be used to find a terminal prompt that signals the end of
     the terminal response to a command sent to it.
+
+    Shells of this kind also represent an actual shell in the node. This means
+    that one of these objects is expected to exist for every one of the shells
+    in the node. These shells are accessible through a *connection* that may be
+    implemented using a certain command (``telnet``, or ``ssh``, for example).
+    It may be possible to have several connections to the same shell, so these
+    shells support this:
+
+    # New connections to the shell are created by calling the ``connect``
+     command of the shell.
+    # These shells will have a *default* connection undefined until an attempt
+     to connect with this shell is done.
+    # Every time any operation with the shell is attempted, a connection needs
+     to be specified, if not, the *default* connection of the shell is used.
+
+    The behavior of these operations is defined in the following methods,
+    implementations of this class are expected to behave as defined here.
     """
 
+    @property
+    def default_connection(self):
+        raise NotImplementedError('default_connection')
+
+    @default_connection.setter
+    def default_shell(self, value):
+        raise NotImplementedError('default_connection.setter')
+
     @abstractmethod
-    def send_command(self, command, matches=None, newline=True, timeout=None):
+    def send_command(
+        self, command, matches=None, newline=True, timeout=None,
+        connection=None
+    ):
         """
         Send a command to the shell.
 
@@ -89,64 +119,115 @@ class BaseShell(object):
          command, False otherwise.
         :param int timeout: Amount of time to wait until a prompt match is
          found in the command response.
+        :param str connection: Name of the connection to be used to send the
+         command. If not defined, the default connection will be used.
         """
 
     @abstractmethod
-    def get_response(self):
+    def get_response(self, connection=None):
         """
-        Get a response from the shell to the previously sent command.
+        Get a response from the shell connection.
 
         This method can be used to add extra processing to the shell response
         if needed, cleaning up terminal control codes is an example.
 
+        :param str connection: Name of the connection to be used to get the
+         response from. If not defined, the default connection will be used.
         :rtype: str
         :return: Shell response to the previously sent command.
         """
 
     @abstractmethod
-    def is_connected(self):
+    def is_connected(self, connection=None):
         """
-        Shows if there is an active connection to the shell.
+        Shows if the connection to the shell is active.
 
+        :param str connection: Name of the connection to check if connected. If
+         not defined, the default connection will be checked.
         :rtype: bool
         :return: True if there is an active connection to the shell, False
          otherwise.
         """
 
     @abstractmethod
-    def connect(self):
+    def connect(self, connection=None):
         """
         Creates a connection to the shell.
+
+        :param str connection: Name of the connection to be created. If not
+         defined, an attempt to create the default connection will be done. If
+         the default connection is already connected, an exception will be
+         raised. If defined in the call but no default connection has been
+         defined yet, this connection will become the default one. If the
+         connection is already connected, an exception will be raised.
         """
 
     @abstractmethod
-    def disconnect(self):
+    def disconnect(self, connection=None):
         """
         Terminates a connection to the shell.
+
+        :param str connection: Name of the connection to be disconnected. If
+         not defined, the default connection will be disconnected. If the
+         default connection is disconnected, no attempt will be done to define
+         a new default connection, the user will have to either create a new
+         default connection by calling ``connect`` or by defining another
+         existing connection as the default one.
         """
 
-    def execute(self, command):
+    def execute(self, command, connection=None):
         """
         Executes a command.
+
+        If the default connection is not defined, or is disconnected, an
+        exception will be raised.
 
         This is just a convenient method that sends a command to the shell
         using send_command and returns its response using get_response.
 
         :param str command: Command to be sent.
+        :param str connection: Connection to be used to execute this command.
         :rtype: str
         :return: Shell response to the command being sent.
         """
-        self.send_command(command)
-        return self.get_response()
+        self.send_command(command, connection=connection)
+        return self.get_response(connection=connection)
 
-    def __call__(self, command):
-        return self.execute(command)
+    def __call__(self, command, connection=None):
+        return self.execute(command, connection=connection)
 
-    def _setup_shell(self):
+    def _setup_connection(self, connection=None):
         """
         Method called by subclasses that will be triggered after matching the
         initial prompt.
+
+        :param str connection: Name of the connection to be set up. If not
+         defined, the default connection will be set up.
         """
+
+
+class _NonExistingConnectionError(Exception):
+    def __init__(self, connection):
+        Exception.__init__(
+            self, 'Non-existing connection {}.'.format(connection)
+        )
+
+
+def _check_existing_connection(method):
+    """
+    Decorator to mark methods that need the existence of their connection
+    argument checked.
+    """
+    @wraps(method)
+    def check(self, *args, **kwargs):
+        connection = kwargs.get('connection', None)
+        if (
+            connection is not None
+        ) and connection not in self._connections.keys():
+            raise _NonExistingConnectionError(connection)
+
+        return method(self, *args, **kwargs)
+    return check
 
 
 @add_metaclass(ABCMeta)
@@ -192,6 +273,9 @@ class PExpectShell(BaseShell):
             try_filter_echo=True,
             spawn_args=None, **kwargs):
 
+        self._connections = OrderedDict()
+        # The default connection is undefined at first.
+        self._default_connection = None
         self._initial_command = initial_command
         self._prompt = prompt
         self._initial_prompt = initial_prompt
@@ -217,6 +301,18 @@ class PExpectShell(BaseShell):
 
         super(PExpectShell, self).__init__(**kwargs)
 
+    @property
+    def default_connection(self):
+        return self._default_connection
+
+    @default_connection.setter
+    @_check_existing_connection
+    def default_connection(self, connection):
+        if connection not in self._connections.keys():
+            raise _NonExistingConnectionError(connection)
+
+        self._default_connection = connection
+
     @abstractmethod
     def _get_connect_command(self):
         """
@@ -232,13 +328,31 @@ class PExpectShell(BaseShell):
         :return: The command to be used when connecting to the shell.
         """
 
-    def send_command(self, command, matches=None, newline=True, timeout=None):
+    def send_command(
+        self, command, matches=None, newline=True, timeout=None,
+        connection=None
+    ):
         """
         See :meth:`BaseShell.send_command` for more information.
         """
-        # Connect if not connected
-        if not self.is_connected():
-            self.connect()
+        # Connection is undefined
+        if connection is None:
+            # Default connection is not connected
+            if not self.is_connected(self._default_connection):
+                # Connect the default connection
+                self.connect(connection)
+            # Either way, an unspecified connection means default connection
+            connection = self._default_connection
+
+        # Connection is defined but nonexistent
+        elif connection not in self._connections:
+            self.connect(connection)
+
+        # Connection is defined and existent
+        else:
+            # Connect if disconnected
+            if not self.is_connected(connection):
+                self.connect(connection)
 
         # Create possible expect matches
         if matches is None:
@@ -251,25 +365,37 @@ class PExpectShell(BaseShell):
         # Save last command in cache to allow to remove echos in get_response()
         self._last_command = command
 
+        if connection is None:
+            connection = self._default_connection
+
         # Send line and expect matches
         if newline:
-            self._spawn.sendline(command)
+            self._connections[connection].sendline(command)
         else:
-            self._spawn.send(command)
+            self._connections[connection].send(command)
 
         # Expect matches
         if timeout is None:
             timeout = self._timeout
 
-        match_index = self._spawn.expect(matches, timeout=timeout)
+        match_index = self._connections[connection].expect(
+            matches, timeout=timeout
+        )
         return match_index
 
-    def get_response(self):
+    @_check_existing_connection
+    def get_response(self, connection=None):
         """
         See :meth:`BaseShell.get_response` for more information.
         """
+        if connection is None:
+            connection = self._default_connection
+
+        if connection is None:
+            raise Exception('Shell has no default connection defined.')
+
         # Convert binary representation to unicode using encoding
-        text = self._spawn.before.decode(self._encoding)
+        text = self._connections[connection].before.decode(self._encoding)
 
         # Remove leading and trailing whitespaces and normalize newlines
         text = text.strip().replace('\r', '')
@@ -291,49 +417,74 @@ class PExpectShell(BaseShell):
 
         return '\n'.join(lines)
 
-    def is_connected(self):
+    @_check_existing_connection
+    def is_connected(self, connection=None):
         """
         See :meth:`BaseShell.is_connected` for more information.
         """
-        return self._spawn is not None and self._spawn.isalive()
+        if connection is None:
+            return (
+                self._default_connection is not None
+            ) and self._connections[self._default_connection].isalive()
+        else:
+            return self._connections[connection].isalive()
 
-    def connect(self):
+    def connect(self, connection=None):
         """
         See :meth:`BaseShell.connect` for more information.
         """
-        if self.is_connected():
-            raise Exception('Shell already connected.')
+        try:
+            if self.is_connected(connection=connection):
+                raise Exception('Shell already connected.')
+        except _NonExistingConnectionError:
+            pass
+
+        # Evaluate connection value
+        if self._default_connection is None:
+            if connection is None:
+                connection = '0'
+            self._default_connection = connection
 
         # Create a child process
-        self._spawn = spawn(
+        self._connections[connection] = spawn(
             self._get_connect_command().strip(),
             **self._spawn_args
         )
 
         # If connection is via password
         if self._password is not None:
-            self._spawn.expect([self._password_match], timeout=self._timeout)
-            self._spawn.sendline(self._password)
+            self._connections[connection].expect(
+                [self._password_match], timeout=self._timeout
+            )
+            self._connections[connection].sendline(self._password)
             self._password = None
 
         # Setup shell before using it
-        self._setup_shell()
+        self._setup_connection(connection)
 
         # Execute initial command if required
         if self._initial_command is not None:
-            self._spawn.expect(self._initial_prompt, timeout=self._timeout)
-            self._spawn.sendline(self._initial_command)
+            self._connections[connection].expect(
+                self._prompt, timeout=self._timeout
+            )
+            self._connections[connection].sendline(self._initial_command)
 
         # Wait for command response to match the prompt
-        self._spawn.expect(self._prompt, timeout=self._timeout)
+        self._connections[connection].expect(
+            self._prompt, timeout=self._timeout
+        )
 
-    def disconnect(self):
+    @_check_existing_connection
+    def disconnect(self, connection=None):
         """
         See :meth:`BaseShell.disconnect` for more information.
         """
-        if not self.is_connected():
-            raise Exception('Shell already disconnected.')
-        self._spawn.close()
+        if connection is None:
+            connection = self._default_connection
+
+        if not self.is_connected(connection):
+            raise Exception('Connection is already disconnected.')
+        self._connections[connection].close()
 
 
 class PExpectBashShell(PExpectShell):
@@ -359,23 +510,30 @@ class PExpectBashShell(PExpectShell):
             **kwargs
         )
 
-    def _setup_shell(self):
+    def _setup_connection(self, connection=None):
         """
         Overriden setup function that will disable the echo on the device on
         the shell and set a pexpect-safe prompt.
         """
+        if connection is None:
+            connection = self._default_connection
+
         # Wait initial prompt
-        self._spawn.expect(self._initial_prompt, timeout=self._timeout)
+        self._connections[connection].expect(
+            self._initial_prompt, timeout=self._timeout
+        )
 
         # Remove echo
-        self._spawn.sendline('stty -echo')
-        self._spawn.expect(self._initial_prompt, timeout=self._timeout)
+        self._connections[connection].sendline('stty -echo')
+        self._connections[connection].expect(
+            self._initial_prompt, timeout=self._timeout
+        )
 
         # Change prompt to a pexpect secure prompt
-        self._spawn.sendline(
+        self._connections[connection].sendline(
             'export PS1={}'.format(PExpectBashShell.FORCED_PROMPT)
         )
-        self._initial_prompt = self._prompt = PExpectBashShell.FORCED_PROMPT
+        self._prompt = PExpectBashShell.FORCED_PROMPT
 
 
 class ShellContext(object):
