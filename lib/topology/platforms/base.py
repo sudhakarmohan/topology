@@ -25,6 +25,7 @@ from __future__ import unicode_literals, absolute_import
 from __future__ import print_function, division
 
 import logging
+from copy import deepcopy
 from datetime import datetime
 from collections import OrderedDict
 from abc import ABCMeta, abstractmethod
@@ -325,6 +326,8 @@ class CommonNode(BaseNode):
         self._shells = OrderedDict()
         self._enabled = True
         self._default_shell = None
+        self._fqdn_or_ip = None
+        self._services = OrderedDict()
 
         # Add support for communication libraries
         self.libs = LibsProxy(self)
@@ -418,6 +421,27 @@ class CommonNode(BaseNode):
         See :meth:`BaseNode.is_enabled` for more information.
         """
         return self._enabled
+
+    def register_service(self, name, protocol, port):
+        if name in self._services:
+            raise Exception('Service "{}" already registered.')
+        if not name:
+            raise Exception('Invalid name for service.')
+
+        self._services[name] = (protocol, port)
+
+    def unregister_service(self, name):
+        if name not in self._services:
+            raise Exception('Unknown service "{}".')
+
+        del self._services[name]
+
+    def get_connection_info(self):
+
+        return {
+            'fqdn_or_ip': self._fqdn_or_ip,
+            'services': deepcopy(self._services)
+        }
 
     def enable(self):
         """
