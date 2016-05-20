@@ -32,7 +32,7 @@ except ImportError:
 from pytest import fixture, raises
 
 from topology.platforms.shell import (
-    _NonExistingConnectionError, PExpectBashShell
+    PExpectBashShell, NonExistingConnectionError, AlreadyDisconnectedError
 )
 
 
@@ -48,7 +48,7 @@ def shell():
 
 @fixture(scope='function')
 def spawn(request):
-    patch_spawn = patch('topology.platforms.shell.spawn')
+    patch_spawn = patch('topology.platforms.shell.Spawn')
     mock_spawn = patch_spawn.start()
 
     def create_mock(*args, **kwargs):
@@ -156,7 +156,7 @@ def test_default_connection(spawn, shell):
 
     assert shell.default_connection == '0'
 
-    with raises(_NonExistingConnectionError):
+    with raises(NonExistingConnectionError):
         shell.default_connection = '2'
 
     shell.default_connection = '1'
@@ -181,7 +181,7 @@ def test_get_response(spawn, shell):
     Test that get_response works properly.
     """
 
-    with raises(Exception):
+    with raises(NonExistingConnectionError):
         shell.get_response()
 
     shell.send_command('command')
@@ -206,7 +206,7 @@ def test_non_existing_connection(spawn, shell):
     shell.connect()
     shell.connect(connection='1')
 
-    with raises(_NonExistingConnectionError):
+    with raises(NonExistingConnectionError):
         shell.is_connected(connection='2')
 
 
@@ -215,7 +215,8 @@ def test_is_connected(spawn, shell):
     Test that is_connected returns correctly.
     """
 
-    assert not shell.is_connected()
+    with raises(NonExistingConnectionError):
+        shell.is_connected()
 
     shell.connect()
 
@@ -236,7 +237,7 @@ def test_disconnect(spawn, shell):
 
     assert not shell.is_connected()
 
-    with raises(Exception):
+    with raises(AlreadyDisconnectedError):
         shell.disconnect()
 
     shell.connect(connection='1')
@@ -244,7 +245,7 @@ def test_disconnect(spawn, shell):
 
     assert not shell.is_connected(connection='1')
 
-    with raises(Exception):
+    with raises(AlreadyDisconnectedError):
         shell.disconnect(connection='1')
 
 
