@@ -269,7 +269,7 @@ class PExpectShell(BaseShell):
      turning off the echo of the command try to filter the echo from the output
      by removing the first line of the output if it match the command.
     :param auto_connect bool: Enable the automatic creation of a connection
-     when ``send_command`` is called if not default exists.
+     when ``send_command`` is called.
     :param dict spawn_args: Arguments to be passed to the Pexpect spawn
      constructor. If this is left as ``None``, then
      ``env={'TERM': 'dumb'}, echo=False`` will be passed as keyword
@@ -362,15 +362,17 @@ class PExpectShell(BaseShell):
         See :meth:`BaseShell.send_command` for more information.
         """
         # Get connection
+        connected = False
         try:
-            spawn = self._get_connection(connection)
-
+            connected = self.is_connected(connection)
         except NonExistingConnectionError:
             if not self._auto_connect:
                 raise
 
+        if not connected:
             self.connect(connection)
-            spawn = self._get_connection(connection)
+
+        spawn = self._get_connection(connection)
 
         # Create possible expect matches
         if matches is None:
@@ -442,7 +444,7 @@ class PExpectShell(BaseShell):
         """
         connection = connection or self._default_connection or '0'
 
-        if connection in self._connections:
+        if connection in self._connections and self.is_connected(connection):
             raise AlreadyConnectedError(connection)
 
         # Create a child process
