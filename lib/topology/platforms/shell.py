@@ -272,6 +272,18 @@ class BaseShell(object):
          defined, the default connection will be set up.
         """
 
+    def _register_command_logger(self, logging_function):
+        """
+        Register a logging function for command executions.
+        """
+        self._command_logger = logging_function
+
+    def _register_response_logger(self, logging_function):
+        """
+        Register a logging function for command responses.
+        """
+        self._response_logger = logging_function
+
 
 @add_metaclass(ABCMeta)
 class PExpectShell(BaseShell):
@@ -394,7 +406,7 @@ class PExpectShell(BaseShell):
     def send_command(
         self, command,
         matches=None, newline=True,
-        timeout=None, connection=None
+        timeout=None, connection=None, silent=False
     ):
         """
         See :meth:`BaseShell.send_command` for more information.
@@ -435,6 +447,9 @@ class PExpectShell(BaseShell):
         else:
             spawn.send(command)
 
+        if silent is not None:
+            self._command_logger(command)
+
         # Expect matches
         if timeout is None:
             timeout = self._timeout
@@ -472,7 +487,11 @@ class PExpectShell(BaseShell):
                 and lines[0].strip() == self._last_command.strip():
             lines.pop(0)
 
-        return '\n'.join(lines)
+        response = '\n'.join(lines)
+
+        self._response_logger(response)
+
+        return response
 
     def is_connected(self, connection=None):
         """

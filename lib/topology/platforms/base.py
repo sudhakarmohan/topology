@@ -439,5 +439,20 @@ class CommonNode(BaseNode):
         """
         self._enabled = False
 
+    def _log_command(self, command):
+        """
+        Command logging function for low-level shell API usage.
+
+        FIXME: how can we specify the shell here?
+        """
+        print('{} [{}].send_command(\'{}\', shell=\'{}\') ::'.format(
+            datetime.now().isoformat(), self.identifier, command
+        ))
+
+    def _log_response(self, response):
+        """
+        Response logging function for low-level shell API usage.
+        """
+        print(response)
 
 __all__ = ['BasePlatform', 'BaseNode', 'CommonNode']
