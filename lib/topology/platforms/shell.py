@@ -435,10 +435,10 @@ class PExpectShell(BaseShell):
         else:
             spawn.send(command)
 
-        # Expect matches
+        # Expect matches timeout = self._timeout
         if timeout is None:
-            timeout = self._timeout
-
+            timeout = 180
+    
         match_index = spawn.expect(
             matches, timeout=timeout
         )
